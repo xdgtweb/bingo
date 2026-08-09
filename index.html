@@ -1,0 +1,1814 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Asistente de Bingo Inteligente</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script async src="https://docs.opencv.org/4.8.0/opencv.js" onload="window.cvReady = true"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Outfit', sans-serif; }
+    
+    @keyframes hit-pulse {
+      0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.8); }
+      50% { transform: scale(1.15); box-shadow: 0 0 20px 10px rgba(52, 211, 153, 0); background: #34d399 !important; color: #064e3b !important; }
+      100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); }
+    }
+    
+    @keyframes scan-line {
+      0% { top: 0; opacity: 0; }
+      10% { opacity: 1; }
+      90% { opacity: 1; }
+      100% { top: 100%; opacity: 0; }
+    }
+
+    @keyframes ripple {
+      0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+      100% { box-shadow: 0 0 0 20px rgba(239, 68, 68, 0); }
+    }
+
+    .mic-listening { animation: ripple 1.5s infinite; }
+    
+    .hit-anim { animation: hit-pulse .6s cubic-bezier(0.4, 0, 0.2, 1); }
+    .ticket-number { transition: all .3s cubic-bezier(0.4, 0, 0.2, 1); }
+    .ticket-number:focus { outline: none; box-shadow: inset 0 0 0 3px #fbbf24; background: #fffbeb; }
+    
+    .cell-crossed, .cell-hit { 
+      position: relative; 
+    }
+    .cell-crossed .printed-num, .cell-hit .printed-num {
+      opacity: 0.4;
+    }
+    .cell-crossed::after, .cell-hit::after {
+      content: '';
+      position: absolute;
+      top: 15%; left: 15%; right: 15%; bottom: 15%;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cline x1='15' y1='15' x2='85' y2='85' stroke='%233b82f6' stroke-width='12' stroke-linecap='round'/%3E%3Cline x1='85' y1='15' x2='15' y2='85' stroke='%233b82f6' stroke-width='12' stroke-linecap='round'/%3E%3C/svg%3E");
+      background-size: contain;
+      background-position: center;
+      background-repeat: no-repeat;
+      pointer-events: none;
+      filter: drop-shadow(0 2px 2px rgba(59, 130, 246, 0.3));
+      opacity: 0.55;
+      mix-blend-mode: multiply;
+    }
+    .cell-hit { animation: hit-pulse .6s cubic-bezier(0.4, 0, 0.2, 1); z-index: 10; }
+    
+    input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; }
+    
+    /* Estilo del cartón más realista (estilo físico) */
+    #ticket, #game-ticket { 
+      background: #fdfbfb;
+      border: 3px solid #5c1c1c; 
+      border-radius: 2px; 
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 0 0 4px #fdfbfb, 0 0 0 6px #5c1c1c;
+      margin: 6px; /* espacio para el shadow-border */
+    }
+    .t-grid { border-color: #5c1c1c; }
+    .printed-num { font-weight: 800; font-family: Arial, sans-serif; font-size: 2em; line-height: 1; color: #5c1c1c; text-align: center; display: flex; align-items: center; justify-content: center; height: 100%; width: 100%; transform: scaleY(1.15); }
+    .ticket-number.cell-empty { 
+      background-color: #5c1c1c !important; 
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='0.8'%3E%3Ccircle cx='12' cy='10' r='6'/%3E%3Cline x1='6.2' y1='7.5' x2='17.8' y2='7.5'/%3E%3Cline x1='6' y1='10' x2='18' y2='10'/%3E%3Cline x1='6.2' y1='12.5' x2='17.8' y2='12.5'/%3E%3Cellipse cx='12' cy='10' rx='2.5' ry='6'/%3E%3Cellipse cx='12' cy='10' rx='5' ry='6'/%3E%3Cpath d='M12 16 v 4 M9 20 h 6' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5'/%3E%3C/svg%3E");
+      background-size: 60%; 
+      background-position: center; 
+      background-repeat: no-repeat;
+    }
+    .cell-crossed .printed-num { opacity: .5; text-shadow: none; }
+    
+    .glass-panel {
+      background: rgba(15, 23, 42, 0.6);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+    }
+
+    .scanner-overlay::after {
+      content: '';
+      position: absolute;
+      left: 0; right: 0;
+      height: 2px;
+      background: #34d399;
+      box-shadow: 0 0 15px 5px rgba(52, 211, 153, 0.5);
+      animation: scan-line 2s linear infinite;
+    }
+
+    /* Panel de bolas 1-90 - círculos por décadas */
+    .ball-num {
+      width: 3rem; height: 3rem;
+      border-radius: 0.5rem;
+      display: inline-flex; align-items: center; justify-content: center;
+      font-size: 1.15rem; font-weight: 900; font-family: 'Outfit', sans-serif;
+      background: rgba(0,0,0,0.4);
+      color: #64748b;
+      border: 1px solid rgba(255,255,255,0.05);
+      transition: all 0.25s cubic-bezier(0.4,0,0.2,1);
+      flex-shrink: 0;
+      cursor: pointer;
+      box-shadow: inset 0 2px 4px rgba(0,0,0,0.5);
+    }
+    .ball-num:hover {
+      background: rgba(0,0,0,0.6);
+      border-color: rgba(255,255,255,0.15);
+    }
+    .ball-num.drawn {
+      color: #34d399; /* Verde esmeralda */
+      border-color: rgba(52, 211, 153, 0.4);
+      background: rgba(52, 211, 153, 0.05);
+      box-shadow: 0 0 10px rgba(52, 211, 153, 0.1);
+    }
+    .ball-num.last-drawn {
+      color: #fbbf24; /* Amarillo ámbar */
+      border-color: rgba(251, 191, 36, 0.6);
+      background: rgba(251, 191, 36, 0.1);
+      box-shadow: 0 0 15px rgba(251, 191, 36, 0.2);
+      animation: hit-pulse .5s cubic-bezier(0.4,0,0.2,1);
+    }
+    .decade-row { display: flex; align-items: center; gap: 0.35rem; justify-content: center; }
+    .decade-label {
+      font-size: 0.75rem; font-weight: 800; color: #475569;
+      width: 3rem; text-align: right; flex-shrink: 0; font-family: 'Outfit', sans-serif;
+      letter-spacing: 0.05em;
+    }
+
+    @keyframes linea-alert {
+      0%,100% { opacity:1; transform:scale(1); }
+      50% { opacity:0.7; transform:scale(1.04); }
+    }
+    @keyframes bingo-alert {
+      0% { transform:scale(0.8); opacity:0; }
+      60% { transform:scale(1.1); opacity:1; }
+      100% { transform:scale(1); opacity:1; }
+    }
+    .alert-linea { animation: linea-alert 0.8s ease-in-out 3; }
+    .alert-bingo { animation: bingo-alert 0.5s cubic-bezier(0.34,1.56,0.64,1) forwards; }
+  </style>
+</head>
+<body class="bg-[#090b14] text-white min-h-screen relative overflow-x-hidden selection:bg-emerald-500/30">
+  <!-- Fondo animado y degradados -->
+  <div class="fixed inset-0 z-[-1] pointer-events-none">
+    <div class="absolute top-[-20%] left-[-10%] w-[60%] h-[60%] rounded-full bg-emerald-600/10 blur-[120px]"></div>
+    <div class="absolute bottom-[-20%] right-[-10%] w-[60%] h-[60%] rounded-full bg-amber-600/10 blur-[120px]"></div>
+    <div class="absolute top-[40%] left-[50%] w-[40%] h-[40%] rounded-full bg-blue-600/10 blur-[120px] translate-x-[-50%]"></div>
+  </div>
+
+  <div class="max-w-2xl mx-auto p-4 pb-24 space-y-6 relative z-10">
+
+    <header class="text-center py-6 border-b border-white/10 mb-6">
+      <div class="inline-flex items-center justify-center p-3 bg-white/5 rounded-2xl backdrop-blur-md border border-white/10 mb-3 shadow-xl">
+        <span class="text-4xl">🎯</span>
+      </div>
+      <h1 class="text-3xl md:text-4xl font-extrabold bg-gradient-to-r from-amber-200 via-amber-400 to-orange-400 bg-clip-text text-transparent tracking-tight">
+        Bingo Inteligente
+      </h1>
+      <p class="text-sm text-slate-400 mt-2 font-medium tracking-wide">VISIÓN HÍBRIDA + RECONOCIMIENTO DE VOZ</p>
+    </header>
+
+    <!-- ZONA SETUP -->
+    <section id="setup-section" class="space-y-6 transition-all duration-500">
+      <div class="glass-panel rounded-3xl p-6 space-y-5 transition-all">
+        <div class="flex items-center gap-3">
+          <div class="w-8 h-8 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold border border-emerald-500/30">1</div>
+          <h2 class="text-sm font-bold uppercase tracking-widest text-slate-200">Subir Cartón</h2>
+        </div>
+        
+        <p class="text-sm text-slate-400">Encuadra el cartón de bingo lo mejor posible. El sistema híbrido extraerá los números automáticamente.</p>
+
+        <div id="drop-zone" onclick="document.getElementById('card-image').click()"
+             class="border-2 border-dashed border-emerald-500/40 bg-emerald-950/20 rounded-2xl p-10 text-center hover:border-emerald-400 hover:bg-emerald-900/30 transition-all duration-300 cursor-pointer group shadow-lg">
+          <input type="file" id="card-image" accept="image/*" class="hidden" onchange="processImage(event)">
+          <div class="transform group-hover:scale-110 transition-transform duration-300">
+            <p class="text-5xl mb-4 drop-shadow-lg">📸</p>
+            <p class="text-lg font-bold text-emerald-300">Toca para subir tu foto</p>
+            <p class="text-xs text-slate-500 mt-2">Formatos soportados: JPG, PNG</p>
+          </div>
+        </div>
+
+        <div id="scan-block" class="hidden space-y-5">
+          <div class="relative w-full border border-slate-700/50 rounded-2xl overflow-hidden bg-black/50 shadow-2xl scanner-overlay">
+            <canvas id="preview-canvas" class="w-full h-auto block opacity-80 mix-blend-luminosity"></canvas>
+          </div>
+          
+          <div id="scan-progress-wrapper" class="space-y-2 bg-black/20 p-4 rounded-xl border border-white/5">
+            <div class="flex justify-between text-sm font-bold text-emerald-400">
+              <span id="scan-status-text" class="flex items-center gap-2">
+                <svg class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                Iniciando análisis...
+              </span>
+              <span id="scan-pct">0%</span>
+            </div>
+            <div class="w-full bg-slate-800/50 rounded-full h-3 overflow-hidden shadow-inner border border-black/50">
+              <div id="scan-progress-bar" class="bg-gradient-to-r from-emerald-500 to-teal-400 h-full rounded-full transition-all duration-300 shadow-[0_0_10px_rgba(52,211,153,0.5)]" style="width: 0%"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="glass-panel rounded-3xl p-6 space-y-5">
+        <div class="flex items-center gap-3">
+          <div class="w-8 h-8 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center font-bold border border-amber-500/30">2</div>
+          <h2 class="text-sm font-bold uppercase tracking-widest text-slate-200">Verificar Cartón</h2>
+        </div>
+        <div class="flex items-center justify-between">
+          <p class="text-sm text-slate-400">Toca la casilla para <strong id="action-label" class="text-rose-400">tachar el número</strong>.</p>
+          <label class="flex items-center cursor-pointer gap-2 bg-black/20 px-3 py-1.5 rounded-full border border-white/10 shadow-inner">
+            <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Editar</span>
+            <div class="relative">
+              <input type="checkbox" id="mode-toggle" class="sr-only peer" checked onchange="toggleClickMode()">
+              <div class="block bg-slate-700 w-10 h-6 rounded-full peer-checked:bg-rose-900/40 transition-colors"></div>
+              <div class="dot absolute left-1 top-1 bg-slate-400 w-4 h-4 rounded-full transition-transform transform peer-checked:translate-x-4 peer-checked:bg-rose-500"></div>
+            </div>
+            <span class="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Tachar</span>
+          </label>
+        </div>
+
+         <div id="ticket" class="text-slate-900 rounded-xl overflow-hidden shadow-2xl transition-all duration-500 transform hover:scale-[1.01]"></div>
+         
+         <div class="bg-black/20 rounded-xl p-3 border border-white/5 flex items-center justify-center">
+            <p id="ticket-status" class="text-sm font-semibold text-slate-400 flex items-center gap-2">
+              <span class="w-2 h-2 rounded-full bg-slate-500 animate-pulse"></span>
+              Esperando cartón...
+            </p>
+         </div>
+
+        <button onclick="startGame()" id="btn-start"
+                class="w-full bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 disabled:from-slate-700 disabled:to-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed text-slate-950 font-extrabold py-4 rounded-2xl transition-all duration-300 text-lg shadow-[0_0_20px_rgba(245,158,11,0.3)] hover:shadow-[0_0_25px_rgba(245,158,11,0.5)] active:scale-95 disabled:shadow-none flex items-center justify-center gap-2 mt-4">
+          <span>Comenzar Partida</span>
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd" /></svg>
+        </button>
+      </div>
+
+      <button onclick="resetTicket()" class="w-full text-sm font-medium text-slate-500 hover:text-rose-400 transition-colors duration-200 text-center flex items-center justify-center gap-2 py-2">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+        Descartar y empezar de nuevo
+      </button>
+    </section>
+
+    <!-- ZONA JUEGO -->
+    <section id="game-section" class="hidden space-y-6 animate-[fadeIn_0.5s_ease-out]">
+      
+      <!-- Panel de Control Principal -->
+      <div class="glass-panel p-5 rounded-3xl flex flex-col md:flex-row items-center justify-between gap-4">
+        
+        <div class="flex-1 w-full min-w-0">
+          <div class="flex items-center gap-3 mb-1">
+            <div id="voice-indicator" class="w-3 h-3 rounded-full bg-slate-500"></div>
+            <span id="voice-status" class="text-sm font-semibold text-slate-300">Micrófono desactivado</span>
+          </div>
+          <p id="last-heard" class="text-sm text-slate-400 flex items-baseline gap-2">
+            Última bola leída: <span class="text-2xl text-amber-400 font-black font-mono tracking-tighter drop-shadow-md">—</span>
+          </p>
+          
+          <div class="flex items-center gap-2 mt-4">
+            <div class="relative">
+              <input id="manual-num" type="number" min="1" max="90" placeholder="Nº" onkeydown="if(event.key==='Enter')manualCall()"
+                     class="w-20 bg-black/40 border border-white/10 rounded-xl px-4 py-2.5 text-lg font-bold text-center focus:outline-none focus:border-amber-400 focus:ring-1 focus:ring-amber-400 transition-all shadow-inner">
+            </div>
+            <button onclick="manualCall()" class="bg-white/10 hover:bg-white/20 border border-white/5 text-white font-semibold px-4 py-2.5 rounded-xl transition-all active:scale-95 shadow-lg">Anotar</button>
+            <button onclick="undoLast()" class="bg-transparent hover:bg-white/5 border border-transparent hover:border-white/10 text-slate-300 text-sm px-4 py-2.5 rounded-xl transition-all active:scale-95 flex items-center gap-1">
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg>
+              Deshacer
+            </button>
+          </div>
+        </div>
+        
+        <button id="mic-btn" onclick="toggleVoice()"
+                class="w-full md:w-auto bg-gradient-to-b from-emerald-500 to-emerald-700 hover:from-emerald-400 hover:to-emerald-600 text-white font-extrabold px-6 py-4 rounded-2xl transition-all shadow-[0_10px_20px_-10px_rgba(16,185,129,0.5)] active:scale-95 flex items-center justify-center gap-2 border border-emerald-400/30">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" /></svg>
+          Activar Voz
+        </button>
+      </div>
+
+      <!-- Probabilidades -->
+      <div class="grid grid-cols-2 gap-4">
+        <div class="glass-panel p-5 rounded-3xl text-center relative overflow-hidden group">
+          <div class="absolute inset-0 bg-gradient-to-b from-amber-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
+          <p class="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Línea</p>
+          <div class="flex items-center justify-center gap-1">
+            <span id="prob-linea" class="text-4xl font-black bg-gradient-to-r from-amber-300 to-amber-500 bg-clip-text text-transparent drop-shadow-sm">0%</span>
+          </div>
+          <div class="mt-2 inline-flex items-center justify-center px-3 py-1 bg-black/30 rounded-full border border-white/5">
+            <p id="linea-detail" class="text-xs font-medium text-slate-300"></p>
+          </div>
+        </div>
+        
+        <div class="glass-panel p-5 rounded-3xl text-center relative overflow-hidden group">
+          <div class="absolute inset-0 bg-gradient-to-b from-emerald-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
+          <p class="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Bingo</p>
+          <div class="flex items-center justify-center gap-1">
+            <span id="prob-bingo" class="text-4xl font-black bg-gradient-to-r from-emerald-300 to-emerald-500 bg-clip-text text-transparent drop-shadow-sm">0%</span>
+          </div>
+          <div class="mt-2 inline-flex items-center justify-center px-3 py-1 bg-black/30 rounded-full border border-white/5">
+            <p id="bingo-detail" class="text-xs font-medium text-slate-300"></p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Cartón de Juego -->
+      <div class="glass-panel p-5 md:p-6 rounded-3xl space-y-5">
+        <div class="flex justify-between items-end border-b border-white/5 pb-3">
+          <div>
+            <h3 class="text-lg font-bold text-white tracking-wide">Tu cartón en juego</h3>
+            <p class="text-xs text-emerald-400 mt-0.5">Sincronizado en tiempo real</p>
+          </div>
+          <div class="bg-black/40 px-3 py-1.5 rounded-lg border border-white/10 shadow-inner">
+            <span id="drawn-count" class="text-sm font-bold text-slate-300 font-mono">0 / 90</span>
+          </div>
+        </div>
+        
+        <div id="game-ticket" class="text-slate-900 rounded-xl overflow-hidden shadow-2xl transform transition-transform duration-300"></div>
+        
+        <div class="pt-2">
+          <p class="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Progreso por filas</p>
+          <div id="row-progress" class="space-y-2.5"></div>
+        </div>
+      </div>
+
+      <!-- Historial -->
+      <div id="history-section" class="hidden glass-panel p-5 rounded-3xl">
+        <h3 class="text-sm font-bold text-slate-300 mb-3 uppercase tracking-widest">Últimas bolas cantadas</h3>
+        <div id="history-chips" class="flex flex-wrap gap-2"></div>
+      </div>
+
+      <!-- Alerta Línea/Bingo -->
+      <div id="game-alert" class="hidden glass-panel p-5 rounded-3xl text-center">
+        <p id="alert-text" class="text-4xl font-black"></p>
+        <p id="alert-sub" class="text-sm text-slate-400 mt-1"></p>
+        <button onclick="document.getElementById('game-alert').classList.add('hidden')" class="mt-3 text-xs text-slate-500 hover:text-white transition-colors">Cerrar</button>
+      </div>
+    </section>
+
+    <!-- Panel de bolas 1-90 — siempre visible, por décadas -->
+    <div class="glass-panel p-5 rounded-3xl space-y-4">
+      <div class="flex items-center justify-between border-b border-white/5 pb-3">
+        <h3 class="text-sm font-bold text-white uppercase tracking-widest">Números cantados</h3>
+        <div class="flex items-center gap-4 text-xs font-semibold text-slate-400">
+          <span class="flex items-center gap-1.5"><span class="ball-num drawn" style="width:1.4rem;height:1.4rem;font-size:0.6rem;display:inline-flex">12</span> Cantado</span>
+          <span class="flex items-center gap-1.5"><span class="ball-num drawn on-ticket" style="width:1.4rem;height:1.4rem;font-size:0.6rem;display:inline-flex">34</span> En tu cartón</span>
+        </div>
+      </div>
+      <div id="balls-panel" class="space-y-3"></div>
+    </div>
+  </div>
+
+  <canvas id="hidden-canvas" class="hidden"></canvas>
+
+  <style>
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+  </style>
+
+  <script>
+    let grid = new Array(27).fill(null);
+    let drawnNumbers = new Set();
+    let history = [];
+    let lastHitNum = null;
+    let recognition = null;
+    let isListening = false;
+    let audioCtx = null;
+    let tesseractWorker = null;
+    let blockedDigits = {};   // n -> timestamp hasta el que está bloqueado
+
+    function stripAccents(s) { return s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, ""); }
+
+    // Diccionario completo de números y jerga de bingo en español
+    const spanishBingoDict = {
+      "dos patitos": 22, "los dos patitos": 22, "patitos": 22,
+      "el abuelo": 90, "abuelo": 90,
+      "la nina bonita": 15, "nina bonita": 15,
+      "los dos sietes": 77, "dos sietes": 77,
+      "los dos ochos": 88, "dos ochos": 88,
+      "los dos treses": 33, "dos treses": 33,
+      "los dos cincos": 55, "dos cincos": 55,
+      "los dos cuatros": 44, "dos cuatros": 44,
+      "los dos doses": 22, "dos doses": 22,
+      "los dos unos": 11, "dos unos": 11,
+      "diez": 10, "once": 11, "doce": 12, "trece": 13, "catorce": 14, "quince": 15,
+      "dieciseis": 16, "diecisiete": 17, "dieciocho": 18, "diecinueve": 19,
+      "veinte": 20, "veintiuno": 21, "veintiun": 21, "veintiuna": 21,
+      "veintidos": 22, "veintitres": 23, "veinticuatro": 24, "veinticinco": 25,
+      "veintiseis": 26, "veintisiete": 27, "veintiocho": 28, "veintinueve": 29,
+      "treinta": 30, "cuarenta": 40, "cincuenta": 50, "sesenta": 60, "setenta": 70,
+      "ochenta": 80, "noventa": 90,
+      "cero": 0, "uno": 1, "una": 1, "un": 1, "dos": 2, "tres": 3,
+      "cuatro": 4, "cinco": 5, "seis": 6, "siete": 7, "ocho": 8, "nueve": 9
+    };
+
+    const tensPrefixes = {
+      "treinta": 30, "cuarenta": 40, "cincuenta": 50,
+      "sesenta": 60, "setenta": 70, "ochenta": 80, "noventa": 90,
+      "veinte": 20, "diez": 10
+    };
+
+    const unitsSuffixes = {
+      "uno": 1, "una": 1, "un": 1, "dos": 2, "tres": 3,
+      "cuatro": 4, "cinco": 5, "seis": 6, "siete": 7, "ocho": 8, "nueve": 9
+    };
+
+    const zeroDigitPhrases = {
+      "uno cero": 10, "dos cero": 20, "tres cero": 30, "cuatro cero": 40,
+      "cinco cero": 50, "seis cero": 60, "siete cero": 70, "ocho cero": 80, "nueve cero": 90,
+      "1 0": 10, "2 0": 20, "3 0": 30, "4 0": 40, "5 0": 50, "6 0": 60, "7 0": 70, "8 0": 80, "9 0": 90
+    };
+
+    function parseSpanishBingoPhrase(text) {
+      let s = " " + stripAccents(text) + " ";
+
+      // 1. Decenas con cero: 'seis cero' -> 60, 'siete cero' -> 70, 'ocho cero' -> 80
+      for (const [phrase, num] of Object.entries(zeroDigitPhrases)) {
+        const re = new RegExp("\\b" + phrase + "\\b", "gi");
+        s = s.replace(re, ` ${num} `);
+      }
+
+      // 2. Frases y modismos especiales
+      for (const [phrase, num] of Object.entries(spanishBingoDict)) {
+        if (phrase.includes(" ")) {
+          const re = new RegExp("\\b" + phrase + "\\b", "gi");
+          s = s.replace(re, ` ${num} `);
+        }
+      }
+
+      // 3. Decenas + opcional "y" + unidades (ej: "sesenta y seis" -> 66, "cuarenta y cinco" -> 45)
+      for (const [tWord, tVal] of Object.entries(tensPrefixes)) {
+        for (const [uWord, uVal] of Object.entries(unitsSuffixes)) {
+          if (uVal === 0) continue;
+          const re = new RegExp(`\\b${tWord}\\s+(?:y\\s+)?${uWord}\\b`, "gi");
+          s = s.replace(re, ` ${tVal + uVal} `);
+        }
+      }
+
+      // 3b. Decenas en dígitos + opcional "y" + unidades (ej: "40 y 5" o "40 5" -> 45)
+      s = s.replace(/\b(10|20|30|40|50|60|70|80|90)\s+(?:y\s+)?([1-9])\b/g, (match, tens, units) => {
+        return " " + (parseInt(tens, 10) + parseInt(units, 10)) + " ";
+      });
+
+      // 4. Palabras exactas (ej: "catorce" -> 14, "sesenta" -> 60)
+      for (const [word, val] of Object.entries(spanishBingoDict)) {
+        if (!word.includes(" ")) {
+          const re = new RegExp(`\\b${word}\\b`, "gi");
+          s = s.replace(re, ` ${val} `);
+        }
+      }
+
+      // 5. Extraer todos los números
+      const rawTokens = [];
+      const matches = s.match(/[0-9]+/g) || [];
+      for (const m of matches) {
+        const n = parseInt(m, 10);
+        if (!isNaN(n)) rawTokens.push(n);
+      }
+
+      // 6. Coalescer tokens inteligentes para Bingo
+      return coalesceBingoTokens(rawTokens);
+    }
+
+    function coalesceBingoTokens(tokens) {
+      const result = [];
+      let i = 0;
+      while (i < tokens.length) {
+        const t0 = tokens[i];
+        const t1 = tokens[i + 1];
+        const t2 = tokens[i + 2];
+
+        // Caso A: [60, 6, 0] o [69, 6, 9] o [77, 7, 7] -> número de dos dígitos seguido de sus dígitos individuales
+        if (t0 >= 10 && t0 <= 90 && t1 !== undefined && t2 !== undefined) {
+          const tens = Math.floor(t0 / 10);
+          const units = t0 % 10;
+          if (t1 === tens && t2 === units) {
+            result.push(t0);
+            i += 3;
+            continue;
+          }
+        }
+
+        // Caso B: [6, 0, 60] o [6, 9, 69] o [7, 7, 77] -> dos dígitos seguidos del número compuesto
+        if (t0 >= 0 && t0 <= 9 && t1 >= 0 && t1 <= 9 && t2 >= 10 && t2 <= 90) {
+          if (t0 * 10 + t1 === t2) {
+            result.push(t2);
+            i += 3;
+            continue;
+          }
+        }
+
+        // Caso C: [60, 60] o [69, 69] -> número repetido
+        if (t0 >= 10 && t0 <= 90 && t1 === t0) {
+          result.push(t0);
+          i += 2;
+          continue;
+        }
+
+        // Caso C2 (NUEVO): Absorber resultados intermedios o tartamudeos (ej: [69, 9] o [69, 6] -> [69])
+        if (t0 >= 10 && t0 <= 90 && t1 !== undefined) {
+          if (t1 === Math.floor(t0 / 10) || t1 === t0 % 10) {
+            result.push(t0);
+            i += 2;
+            continue;
+          }
+        }
+
+        // Caso D: [6, 0] -> el locutor dice 'seis cero' para 60, [7, 7] -> 'siete siete' para 77
+        if (t0 >= 1 && t0 <= 9 && t1 >= 0 && t1 <= 9) {
+          const compound = t0 * 10 + t1;
+          if (compound >= 10 && compound <= 90) {
+            result.push(compound);
+            i += 2;
+            continue;
+          }
+        }
+
+        // Caso E: número válido suelto del 1 al 90 (ej: 8, 14, 60, 69)
+        if (t0 >= 1 && t0 <= 90) {
+          result.push(t0);
+          i += 1;
+          continue;
+        }
+
+        i++;
+      }
+      return result;
+    }
+
+    function beep(freq, dur, vol) {
+      try {
+        audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+        const o = audioCtx.createOscillator();
+        const g = audioCtx.createGain();
+        o.connect(g); g.connect(audioCtx.destination);
+        o.type = "sine"; o.frequency.value = freq;
+        g.gain.setValueAtTime(vol || 0.15, audioCtx.currentTime);
+        g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+        o.start(); o.stop(audioCtx.currentTime + dur);
+      } catch (e) {}
+    }
+
+    function speak(text) {
+      try {
+        const u = new SpeechSynthesisUtterance(text);
+        u.lang = "es-ES";
+        speechSynthesis.speak(u);
+      } catch (e) {}
+    }
+
+    function combinations(n, r) {
+      if (r < 0 || r > n) return 0;
+      if (r === 0 || r === n) return 1;
+      if (r > n / 2) r = n - r;
+      let res = 1;
+      for (let i = 1; i <= r; i++) res = res * (n - i + 1) / i;
+      return res;
+    }
+    
+    function probNeeded(needed, remaining, window) {
+      if (needed <= 0) return 100;
+      if (needed > window || needed > remaining) return 0;
+      return Math.round(combinations(remaining - needed, window - needed) / combinations(remaining, window) * 1000) / 10;
+    }
+
+    function loadImage(file) {
+      return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.src = URL.createObjectURL(file);
+      });
+    }
+
+    async function initWorker() {
+      if (!tesseractWorker) {
+        tesseractWorker = await Tesseract.createWorker('eng');
+        await tesseractWorker.setParameters({
+          tessedit_char_whitelist: '0123456789',
+          tessedit_pageseg_mode: '8' // PSM 8 = Palabra única, mejor para 1-2 dígitos juntos
+        });
+      }
+    }
+
+    function updateProgress(pct, text) {
+      document.getElementById("scan-progress-bar").style.width = pct + "%";
+      document.getElementById("scan-pct").innerText = pct + "%";
+      if (text) {
+        const statusEl = document.getElementById("scan-status-text");
+        statusEl.innerHTML = `<svg class="animate-spin h-4 w-4 inline mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>${text}`;
+      }
+    }
+
+    async function processImage(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      if (!window.cvReady) {
+        alert("El motor OpenCV aún se está cargando. Espera unos segundos y vuelve a subirla.");
+        return;
+      }
+
+      const sourceImage = await loadImage(file);
+      document.getElementById("drop-zone").classList.add("hidden");
+      document.getElementById("scan-block").classList.remove("hidden");
+      updateProgress(0, "Iniciando análisis híbrido anti-fallos...");
+      
+      setTimeout(() => runHybridScan(sourceImage), 100);
+    }
+
+    async function runHybridScan(sourceImage) {
+      try {
+        await initWorker();
+        updateProgress(10, "Buscando estructura principal...");
+
+        const canvas = document.getElementById("hidden-canvas");
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        canvas.width = 1200;
+        canvas.height = Math.round(1200 * (sourceImage.height / sourceImage.width));
+        ctx.drawImage(sourceImage, 0, 0, canvas.width, canvas.height);
+
+        // --- FASE 1: Detección Canny Robusta ---
+        let src = cv.imread(canvas);
+        let gray = new cv.Mat();
+        cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
+
+        let edges = new cv.Mat();
+        cv.Canny(gray, edges, 50, 150);
+        let M = cv.Mat.ones(5, 5, cv.CV_8U);
+        cv.dilate(edges, edges, M, new cv.Point(-1, -1), 1);
+
+        let contours = new cv.MatVector();
+        let hierarchy = new cv.Mat();
+        cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+        let maxArea = 0;
+        let paperContour = null;
+        for (let i = 0; i < contours.size(); ++i) {
+          let cnt = contours.get(i);
+          let area = cv.contourArea(cnt);
+          // Buscamos el papel: el contorno más grande que sea al menos el 10% de la imagen
+          if (area > maxArea && area > (src.cols * src.rows * 0.10)) {
+             maxArea = area;
+             paperContour = cnt;
+          }
+        }
+
+        let gridRect = null;
+        if (paperContour) {
+            // Aproximamos el contorno a un polígono para encontrar los 4 vértices (esquinas del papel)
+            let approx = new cv.Mat();
+            cv.approxPolyDP(paperContour, approx, 0.02 * cv.arcLength(paperContour, true), true);
+            
+            let pts = [];
+            if (approx.rows === 4) {
+                // Cuadrilátero perfecto: corrige rotación Y perspectiva (deformación trapezoidal)
+                for (let i = 0; i < 4; i++) {
+                    pts.push({x: approx.data32S[i*2], y: approx.data32S[i*2+1]});
+                }
+            } else {
+                // Fallback seguro: rectángulo rotado si el papel está cortado o tapado
+                let rect = cv.minAreaRect(paperContour);
+                let rectPts = cv.RotatedRect.points(rect);
+                for (let i = 0; i < 4; i++) {
+                    pts.push({x: rectPts[i].x, y: rectPts[i].y});
+                }
+            }
+            approx.delete();
+
+            // Ordenar los 4 puntos: Top-Left, Top-Right, Bottom-Right, Bottom-Left
+            pts.sort((a, b) => a.y - b.y); // Ordenar por Y
+            let top = [pts[0], pts[1]].sort((a, b) => a.x - b.x); // Los 2 de arriba ordenados por X
+            let bottom = [pts[2], pts[3]].sort((a, b) => a.x - b.x); // Los 2 de abajo ordenados por X
+            let tl = top[0], tr = top[1], bl = bottom[0], br = bottom[1];
+            
+            // Calcular ancho y alto de la imagen aplanada
+            let widthA = Math.hypot(br.x - bl.x, br.y - bl.y);
+            let widthB = Math.hypot(tr.x - tl.x, tr.y - tl.y);
+            let maxWidth = Math.max(widthA, widthB);
+            
+            let heightA = Math.hypot(tr.x - br.x, tr.y - br.y);
+            let heightB = Math.hypot(tl.x - bl.x, tl.y - bl.y);
+            let maxHeight = Math.max(heightA, heightB);
+
+            // Mapeo de perspectiva de 4 puntos
+            let srcCoords = cv.matFromArray(4, 1, cv.CV_32FC2, [
+                tl.x, tl.y, tr.x, tr.y, br.x, br.y, bl.x, bl.y
+            ]);
+            let dstCoords = cv.matFromArray(4, 1, cv.CV_32FC2, [
+                0, 0, maxWidth, 0, maxWidth, maxHeight, 0, maxHeight
+            ]);
+
+            // Aplicar Warp Perspective para dejar el cartón 100% plano y ortogonal
+            let M = cv.getPerspectiveTransform(srcCoords, dstCoords);
+            let srcColor = cv.imread(canvas);
+            let warpedSrc = new cv.Mat();
+            cv.warpPerspective(srcColor, warpedSrc, M, new cv.Size(maxWidth, maxHeight), cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar(255, 255, 255, 255));
+            
+            // Reemplazar la imagen en el canvas oculto por la versión aplanada perfecta
+            cv.imshow("hidden-canvas", warpedSrc);
+            
+            srcCoords.delete(); dstCoords.delete(); M.delete(); srcColor.delete(); warpedSrc.delete();
+
+            // Como la imagen ya no tiene deformación de cámara, esta extrapolación
+            // encajará milimétricamente con la cuadrícula impresa del cartón.
+            gridRect = {
+                x: maxWidth * 0.035,
+                y: maxHeight * 0.115,
+                width: maxWidth * 0.93,
+                height: maxHeight * 0.805
+            };
+        } else {
+            console.warn("No se detectó contorno. Activando Fallback.");
+            gridRect = {
+              x: canvas.width * 0.05,
+              y: canvas.height * 0.15,
+              width: canvas.width * 0.90,
+              height: canvas.height * 0.70
+            };
+        }
+        
+        src.delete(); gray.delete(); edges.delete(); contours.delete(); hierarchy.delete();
+
+        const previewCanvas = document.getElementById("preview-canvas");
+        const prevCtx = previewCanvas.getContext('2d');
+        previewCanvas.width = canvas.width;
+        previewCanvas.height = canvas.height;
+        // Dibujamos el hidden-canvas (que ahora contiene la imagen rotada y enderezada)
+        prevCtx.drawImage(document.getElementById("hidden-canvas"), 0, 0);
+        
+        prevCtx.strokeStyle = '#34d399'; 
+        prevCtx.lineWidth = 6;
+        prevCtx.shadowColor = '#34d399';
+        prevCtx.shadowBlur = 15;
+        prevCtx.strokeRect(gridRect.x, gridRect.y, gridRect.width, gridRect.height);
+        prevCtx.shadowBlur = 0;
+
+        updateProgress(20, "Clasificando celdas por brillo...");
+
+        // --- FASE 2: Clasificación Inteligente + OCR ---
+        grid = new Array(27).fill(null);
+        let confidence = new Array(27).fill(0); // Votos de confianza por casilla
+        const cellW = Math.floor(gridRect.width / 9);
+        const cellH = Math.floor(gridRect.height / 3);
+        const scaleX = previewCanvas.width / canvas.width;
+        const scaleY = previewCanvas.height / canvas.height;
+        let foundCount = 0;
+        let currentProgress = 20;
+        const progressPerCell = 80 / 27;
+
+        // ► PASO A: Calcular la luma del FONDO (papel blanco vs fondo marrón) de las 27 celdas
+        let cellInfo = [];
+        for (let r = 0; r < 3; r++) {
+          for (let c = 0; c < 9; c++) {
+            let cellX = Math.round(gridRect.x + c * cellW);
+            let cellY = Math.round(gridRect.y + r * cellH);
+            let data = ctx.getImageData(cellX, cellY, cellW, cellH).data;
+            let pixelLumas = [];
+            for (let i = 0; i < data.length; i += 4) {
+                pixelLumas.push(0.299*data[i] + 0.587*data[i+1] + 0.114*data[i+2]);
+            }
+            pixelLumas.sort((a, b) => b - a); // Ordenar de mayor a menor brillo
+            // Promedio del 20% de píxeles más claros: la celda blanca siempre dará un valor mayor
+            // que la celda marrón, ignorando cuánta tinta negra tenga el número impreso.
+            let top20Count = Math.floor(pixelLumas.length * 0.20);
+            let top20Sum = 0;
+            for (let i = 0; i < top20Count; i++) top20Sum += pixelLumas[i];
+            let bgLuma = top20Sum / top20Count;
+
+            cellInfo.push({ r, c, luma: bgLuma, x: cellX, y: cellY });
+          }
+        }
+
+        // ► PASO B: (no se necesita pre-cálculo; el check se hace por celda con fracción de blancos)
+
+        // ► PASO C: Extraer y analizar cada una de las 27 celdas
+        for (let r = 0; r < 3; r++) {
+          for (let c = 0; c < 9; c++) {
+            let info = cellInfo.find(x => x.r === r && x.c === c);
+            let cellX = info.x, cellY = info.y;
+
+            currentProgress += progressPerCell;
+            updateProgress(Math.round(currentProgress), `Pasada 1 fila ${r+1}, col ${c+1}...`);
+
+            // Margen lateral 10%, margen superior 6%, altura 82% → captura toda la celda sin bordes
+            let cropX = cellX + Math.round(cellW * 0.10);
+            let cropW = Math.round(cellW * 0.80);
+            let cropY = cellY + Math.round(cellH * 0.06);
+            let cropH = Math.round(cellH * 0.82);
+
+            // 1. Obtener imagen del recorte exacto (resolución original baja)
+            let tempCanvas = document.createElement("canvas");
+            tempCanvas.width = cropW;
+            tempCanvas.height = cropH;
+            let tempCtx = tempCanvas.getContext('2d');
+            tempCtx.drawImage(canvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+
+            // ── PRE-CHECK DEFINITIVO BASADO EN CONTRASTE (Inmune a márgenes desviados y a fotos en blanco y negro) ──
+            // Hacemos un recorte súper ajustado al 60% central de la celda.
+            // Esto esquiva por completo la mesa y los márgenes blancos si el escáner se desvía.
+            // En este 60% central: 
+            // - Un globo ocupará parte del centro, pero el fondo oscuro seguirá siendo la mayoría (la mediana será oscura).
+            // - Un número ocupará parte del centro, pero el fondo blanco será la mayoría (la mediana será blanca).
+            let pX = cellX + Math.round(cellW * 0.20);
+            let pY = cellY + Math.round(cellH * 0.20);
+            let pW = Math.round(cellW * 0.60);
+            let pH = Math.round(cellH * 0.60);
+            
+            // Limitamos a los bordes del canvas por si acaso
+            pW = Math.max(1, Math.min(pW, canvas.width  - pX));
+            pH = Math.max(1, Math.min(pH, canvas.height - pY));
+            
+            let pCtx = document.createElement("canvas").getContext('2d');
+            pCtx.canvas.width = pW; pCtx.canvas.height = pH;
+            pCtx.drawImage(canvas, pX, pY, pW, pH, 0, 0, pW, pH);
+            
+            let pData = pCtx.getImageData(0, 0, pW, pH).data;
+            let preLumas = [];
+            for (let i = 0; i < pData.length; i += 4) {
+                preLumas.push(0.299*pData[i] + 0.587*pData[i+1] + 0.114*pData[i+2]);
+            }
+            preLumas.sort((a, b) => a - b);
+            
+            let medianLuma = preLumas[Math.floor(preLumas.length * 0.50)];
+            let prePaperLuma = preLumas[Math.floor(preLumas.length * 0.95)];
+            if (prePaperLuma < 1) prePaperLuma = 1;
+            let bgRatio = medianLuma / prePaperLuma;
+            
+            // Si el fondo dominante (mediana) es notablemente más oscuro que el blanco máximo (ratio < 0.85), es un globo.
+            if (bgRatio < 0.85) {
+                prevCtx.fillStyle = 'rgba(100,116,139,0.35)';
+                prevCtx.fillRect(cropX * scaleX, cropY * scaleY, cropW * scaleX, cropH * scaleY);
+                console.log(`[r=${r},c=${c}] ⬛ Celda oscura/globo (Ratio=${bgRatio.toFixed(2)}) → ignorada`);
+                continue;
+            }
+            console.log(`[r=${r},c=${c}] ✅ Celda clara/número (Ratio=${bgRatio.toFixed(2)}) → procesando`);
+            
+            let imgData = tempCtx.getImageData(0, 0, cropW, cropH);
+            let d = imgData.data;
+
+            // 2. Normalización Lineal Completa (0 a 255)
+            // Encontramos el color del papel (percentil 95) y de la tinta (percentil 2) en esta celda
+            let lumas = [];
+            for (let i = 0; i < d.length; i += 4) {
+                lumas.push(0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2]);
+            }
+            lumas.sort((a, b) => a - b);
+            let paperLuma = lumas[Math.floor(lumas.length * 0.95)];
+            let inkLuma = lumas[Math.floor(lumas.length * 0.02)];
+            let range = paperLuma - inkLuma;
+            if (range < 1) range = 1;
+
+            // 3. Estirar el brillo: La tinta se vuelve negra (0) y el papel blanco puro (255)
+            // Esto anula cualquier sombra de la derecha de forma matemática e impecable
+            for (let i = 0; i < d.length; i += 4) {
+                let l = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
+                let newL = ((l - inkLuma) / range) * 255;
+                if (newL < 0) newL = 0;
+                if (newL > 255) newL = 255;
+                
+                // Aplicar escala de grises
+                d[i] = d[i+1] = d[i+2] = newL;
+                d[i+3] = 255;
+            }
+            tempCtx.putImageData(imgData, 0, 0);
+
+            // 4. Preparar canvas final para Tesseract
+            // RESTAURAMOS EL SECRETO DEL 8/15: Estiramiento vertical a 360x360 y padding de 40px
+            let targetW = 360;
+            let targetH = 360;
+
+            const subCanvas = document.createElement("canvas");
+            subCanvas.width = targetW + 40; 
+            subCanvas.height = targetH + 40; 
+            const subCtx = subCanvas.getContext('2d');
+            subCtx.fillStyle = "#FFFFFF";
+            subCtx.fillRect(0, 0, subCanvas.width, subCanvas.height);
+
+            // 5. Dibujar imagen normalizada. Al estar mapeada matemáticamente de 0 a 255, 
+            // ya no hace falta aplicar ningún filtro CSS traicionero que borre los números claros.
+            subCtx.drawImage(tempCanvas, 0, 0, cropW, cropH, 20, 20, targetW, targetH);
+
+            // ─────────────────────────────────────────────────────────────────
+            // SISTEMA DE VOTACIÓN 5 INTENTOS + RE-ENCUADRE
+            // Cada intento usa un percentil de luz distinto Y un pequeño
+            // desplazamiento del recorte (xOff, yOff) para cubrir el caso
+            // en que la celda esté ligeramente fuera de la cuadrícula.
+            // Solo se acepta si ≥3 intentos coinciden (mayoría absoluta).
+            // Si no, se continúa con desempate hasta 2 rondas extra.
+            // ─────────────────────────────────────────────────────────────────
+            let expectedColMin = c === 0 ? 1 : c * 10;
+            let expectedColMax = c === 8 ? 90 : (c + 1) * 10 - 1;
+
+            // Extrae el número válido para esta columna del texto bruto de Tesseract
+            function extractValid(text) {
+                let digits = text.replace(/\D/g, "");
+                for (let len = Math.min(digits.length, 2); len >= 1; len--) {
+                    for (let s = 0; s <= digits.length - len; s++) {
+                        let num = parseInt(digits.substring(s, s + len), 10);
+                        if (num >= expectedColMin && num <= expectedColMax) return num;
+                    }
+                }
+                return null;
+            }
+
+            // Lee un recorte de la celda con desplazamiento (xOff, yOff en píxeles) y percentil de luz
+            async function readAttempt(xOff, yOff, pctPaper) {
+                // Clampear el origen pero mantener SIEMPRE el mismo ancho/alto de recorte
+                let ax = Math.max(0, Math.min(canvas.width  - cropW, cropX + xOff));
+                let ay = Math.max(0, Math.min(canvas.height - cropH, cropY + yOff));
+
+                let vc = document.createElement("canvas");
+                vc.width = cropW; vc.height = cropH;
+                let vctx = vc.getContext('2d');
+                vctx.drawImage(canvas, ax, ay, cropW, cropH, 0, 0, cropW, cropH);
+
+                let id = vctx.getImageData(0, 0, cropW, cropH);
+                let vd = id.data;
+                let lums = [];
+                for (let i = 0; i < vd.length; i += 4) lums.push(0.299*vd[i] + 0.587*vd[i+1] + 0.114*vd[i+2]);
+                lums.sort((a, b) => a - b);
+                let vPaper = lums[Math.floor(lums.length * pctPaper)];
+                let vInk   = lums[Math.floor(lums.length * 0.02)];
+                let vRange = Math.max(1, vPaper - vInk);
+                for (let i = 0; i < vd.length; i += 4) {
+                    let newL = Math.min(255, Math.max(0, ((0.299*vd[i]+0.587*vd[i+1]+0.114*vd[i+2] - vInk) / vRange) * 255));
+                    vd[i] = vd[i+1] = vd[i+2] = newL; vd[i+3] = 255;
+                }
+                vctx.putImageData(id, 0, 0);
+
+                let vs = document.createElement("canvas");
+                vs.width = 400; vs.height = 400;
+                let vsCtx = vs.getContext('2d');
+                vsCtx.fillStyle = "#FFFFFF";
+                vsCtx.fillRect(0, 0, 400, 400);
+                vsCtx.drawImage(vc, 0, 0, cropW, cropH, 20, 20, 360, 360);
+                let res = await tesseractWorker.recognize(vs);
+                return extractValid(res.data.text);
+            }
+
+            // ═══ 8 INTENTOS SECUENCIALES con re-encuadres VISIBLES ═══
+            // shift = 20% del ancho de celda para movimiento amplio y visible
+            let shift = Math.round(cellW * 0.20);
+            let halfShift = Math.round(shift * 0.6);
+
+            // 8 encuadres cubriendo: centro, 4 laterales, 3 diagonales
+            const attempts = [
+                [0,           0,           0.95],   // 1: centro
+                [-shift,      0,           0.93],   // 2: izquierda
+                [+shift,      0,           0.97],   // 3: derecha
+                [0,           -shift,      0.90],   // 4: arriba
+                [0,           +shift,      0.98],   // 5: abajo
+                [-halfShift, -halfShift,   0.92],   // 6: diagonal sup-izq
+                [+halfShift, -halfShift,   0.94],   // 7: diagonal sup-der
+                [-halfShift, +halfShift,   0.96],   // 8: diagonal inf-izq
+            ];
+
+            let votes = {};
+            let allReads = [];
+            let winner = null, maxVotes = 0;
+
+            for (let attempt = 0; attempt < attempts.length; attempt++) {
+                let [xOff, yOff, pct] = attempts[attempt];
+
+                // ── VISUAL (zona ya confirmada como clara por pre-check) ──
+                let vx = (cropX + xOff) * scaleX;
+                let vy = (cropY + yOff) * scaleY;
+                let vw = cropW * scaleX;
+                let vh = cropH * scaleY;
+
+                prevCtx.clearRect(vx - 3, vy - 3, vw + 6, 3);
+                prevCtx.clearRect(vx - 3, vy + vh, vw + 6, 3);
+                prevCtx.clearRect(vx - 3, vy, 3, vh);
+                prevCtx.clearRect(vx + vw, vy, 3, vh);
+
+                prevCtx.strokeStyle = 'rgba(251, 146, 60, 0.95)';
+                prevCtx.lineWidth = 2;
+                prevCtx.setLineDash([4, 3]);
+                prevCtx.strokeRect(vx, vy, vw, vh);
+                prevCtx.setLineDash([]);
+
+                prevCtx.fillStyle = 'rgba(251, 146, 60, 0.92)';
+                prevCtx.fillRect(vx, vy, 18, 14);
+                prevCtx.fillStyle = '#000';
+                prevCtx.font = 'bold 10px monospace';
+                prevCtx.textAlign = 'center';
+                prevCtx.fillText(`${attempt+1}`, vx + 9, vy + 11);
+                prevCtx.textAlign = 'left';
+
+                await new Promise(res => setTimeout(res, 0));
+
+                // ── 3º: LECTURA OCR ──
+                let n = await readAttempt(xOff, yOff, pct);
+                allReads.push(n);
+                if (n !== null) {
+                    votes[n] = (votes[n] || 0) + 1;
+                    if (votes[n] > maxVotes) { maxVotes = votes[n]; winner = n; }
+                }
+
+                prevCtx.fillStyle = n !== null ? 'rgba(52,211,153,0.92)' : 'rgba(239,68,68,0.75)';
+                prevCtx.fillRect(vx, vy, 18, 14);
+                prevCtx.fillStyle = '#000';
+                prevCtx.font = 'bold 9px monospace';
+                prevCtx.textAlign = 'center';
+                prevCtx.fillText(n !== null ? '✓' : '✗', vx + 9, vy + 11);
+                prevCtx.textAlign = 'left';
+
+                console.log(`[r=${r},c=${c}] Intento ${attempt+1}/8: ${n} → ${JSON.stringify(votes)}`);
+
+                if (maxVotes >= 3) {
+                    console.log(`[r=${r},c=${c}] ✅ 3 votos → salto inmediato: ${winner}`);
+                    break;
+                }
+                if (maxVotes >= 2 && attempt >= 3) {
+                    console.log(`[r=${r},c=${c}] ✅ 2 votos confirmados en intento ${attempt+1}: ${winner}`);
+                    break;
+                }
+            }
+
+            // Desempate: solo si no hay 2 votos todavía
+            if (maxVotes < 2) {
+                const tieAttempts = [
+                    [-shift, -shift, 0.92],
+                    [+shift, +shift, 0.94],
+                ];
+                for (let attempt = 0; attempt < tieAttempts.length; attempt++) {
+                    let [xOff, yOff, pct] = tieAttempts[attempt];
+
+                    let vx = (cropX + xOff) * scaleX;
+                    let vy = (cropY + yOff) * scaleY;
+                    let vw = cropW * scaleX;
+                    let vh = cropH * scaleY;
+                    prevCtx.strokeStyle = 'rgba(168,85,247,0.9)';
+                    prevCtx.lineWidth = 2;
+                    prevCtx.setLineDash([3, 3]);
+                    prevCtx.strokeRect(vx, vy, vw, vh);
+                    prevCtx.setLineDash([]);
+                    await new Promise(res => setTimeout(res, 0));
+
+                    let n = await readAttempt(xOff, yOff, pct);
+                    allReads.push(n);
+                    if (n !== null) {
+                        votes[n] = (votes[n] || 0) + 1;
+                        if (votes[n] > maxVotes) { maxVotes = votes[n]; winner = n; }
+                    }
+                    console.log(`[r=${r},c=${c}] Desempate ${attempt+1}/2: ${n}`);
+                    if (maxVotes >= 2) break;
+                }
+            }
+
+            // ── RESULTADO FINAL ──
+            // Verde = 3+ votos (certeza alta), Azul = 2 votos (confirmado)
+            if (winner !== null && maxVotes >= 2) {
+                grid[r * 9 + c] = winner;
+                foundCount++;
+                if (maxVotes >= 3)      prevCtx.fillStyle = 'rgba(52, 211, 153, 0.50)';   // verde
+                else                    prevCtx.fillStyle = 'rgba(56, 189, 248, 0.50)';   // azul
+                console.log(`[r=${r},c=${c}] ${maxVotes>=3?'✅':'☑️'} ${winner} (${maxVotes} votos)`);
+                confidence[r * 9 + c] = maxVotes;
+            } else {
+                prevCtx.fillStyle = 'rgba(239, 68, 68, 0.5)';
+                if (winner !== null) {
+                    console.log(`[r=${r},c=${c}] ❌ Ignorado por falta de quorum (solo 1 voto para ${winner})`);
+                } else {
+                    console.log(`[r=${r},c=${c}] ❌ No detectado`);
+                }
+            }
+            prevCtx.fillRect(cropX * scaleX, cropY * scaleY, cropW * scaleX, cropH * scaleY);
+          }
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // SEGUNDA PASADA: re-encuadrar TODO EL CARTÓN en 4 posiciones distintas
+        // Solo re-lee casillas con confianza < 3. Compara con la primera pasada.
+        // ═══════════════════════════════════════════════════════════════════
+        updateProgress(85, "Segunda pasada: reencuadrando el cartón...");
+
+        // Desplazamiento = ~10% del tamaño de celda → movimiento real y significativo
+        const s1 = Math.round(cellW * 0.10);
+        const s2 = Math.round(cellH * 0.10);
+        const cardShifts = [
+            [+s1,   0  ],   // derecha
+            [-s1,   0  ],   // izquierda
+            [  0, +s2  ],   // abajo
+            [  0, -s2  ],   // arriba
+            [+s1, +s2  ],   // diagonal inf-der
+            [-s1, -s2  ],   // diagonal sup-izq
+            [+s1, -s2  ],   // diagonal sup-der
+            [-s1, +s2  ],   // diagonal inf-izq
+        ];
+
+        const cardShiftColors = [
+            'rgba(6,  182, 212, 0.85)',   // cian        → derecha
+            'rgba(139, 92, 246, 0.85)',   // violeta     → izquierda
+            'rgba(16, 185, 129, 0.85)',   // esmeralda   → abajo
+            'rgba(245, 158, 11, 0.85)',   // ámbar       → arriba
+            'rgba(239,  68,  68, 0.85)',  // rojo        → diagonal inf-der
+            'rgba(236, 72,  153, 0.85)',  // rosa        → diagonal sup-izq
+            'rgba(99,  102, 241, 0.85)',  // índigo      → diagonal sup-der
+            'rgba(20,  184, 166, 0.85)',  // teal        → diagonal inf-izq
+        ];
+
+        for (let si = 0; si < cardShifts.length; si++) {
+            let [gxOff, gyOff] = cardShifts[si];
+            let shiftColor = cardShiftColors[si];
+
+            // Calcular cuadrícula desplazada
+            let gr2 = {
+                x: gridRect.x + gxOff,
+                y: gridRect.y + gyOff,
+                width: gridRect.width,
+                height: gridRect.height
+            };
+            let cW2 = Math.floor(gr2.width / 9);
+            let cH2 = Math.floor(gr2.height / 3);
+
+            // ── VISUAL: dibujar el borde del cartón reencuadrado ──
+            prevCtx.strokeStyle = shiftColor;
+            prevCtx.lineWidth = 3;
+            prevCtx.setLineDash([8, 5]);
+            prevCtx.strokeRect(gr2.x * scaleX, gr2.y * scaleY, gr2.width * scaleX, gr2.height * scaleY);
+            prevCtx.setLineDash([]);
+            await new Promise(res => setTimeout(res, 0));
+
+            for (let r = 0; r < 3; r++) {
+              for (let c = 0; c < 9; c++) {
+                // Solo re-leer casillas que no tienen 3 votos de confianza
+                if (confidence[r * 9 + c] >= 3) continue;
+
+                let cellX2 = Math.round(gr2.x + c * cW2);
+                let cellY2 = Math.round(gr2.y + r * cH2);
+                let cx2 = cellX2 + Math.round(cW2 * 0.15);
+                let cw2 = Math.round(cW2 * 0.70);
+                let cy2 = cellY2 + Math.round(cH2 * 0.15);
+                let ch2 = Math.round(cH2 * 0.70);
+
+                // ── PRE-CHECK P2 BASADO EN CONTRASTE (Igual que P1) ──
+                {
+                  let p2X = cellX2 + Math.round(cW2 * 0.20);
+                  let p2Y = cellY2 + Math.round(cH2 * 0.20);
+                  let p2W = Math.round(cW2 * 0.60);
+                  let p2H = Math.round(cH2 * 0.60);
+                  
+                  p2W = Math.max(1, Math.min(p2W, canvas.width  - p2X));
+                  p2H = Math.max(1, Math.min(p2H, canvas.height - p2Y));
+                  
+                  let chkC = document.createElement("canvas");
+                  chkC.width = p2W; chkC.height = p2H;
+                  let chkCtx = chkC.getContext('2d');
+                  chkCtx.drawImage(canvas, p2X, p2Y, p2W, p2H, 0, 0, p2W, p2H);
+                  let pd2 = chkCtx.getImageData(0, 0, p2W, p2H).data;
+                  let preL2 = [];
+                  for (let i = 0; i < pd2.length; i += 4) {
+                    preL2.push(0.299*pd2[i] + 0.587*pd2[i+1] + 0.114*pd2[i+2]);
+                  }
+                  preL2.sort((a, b) => a - b);
+                  let medL2 = preL2[Math.floor(preL2.length * 0.50)];
+                  let papL2 = preL2[Math.floor(preL2.length * 0.95)];
+                  if (papL2 < 1) papL2 = 1;
+                  
+                  if (medL2 / papL2 < 0.85) continue; // globo → skip
+                }
+
+                // ── VISUAL: recuadro de la casilla siendo reanalizada ──
+                let p2vx = cx2 * scaleX, p2vy = cy2 * scaleY;
+                let p2vw = cw2 * scaleX, p2vh = ch2 * scaleY;
+                prevCtx.strokeStyle = shiftColor;
+                prevCtx.lineWidth = 2;
+                prevCtx.setLineDash([3, 2]);
+                prevCtx.strokeRect(p2vx, p2vy, p2vw, p2vh);
+                prevCtx.setLineDash([]);
+                // Badge "P2" en la esquina
+                prevCtx.fillStyle = shiftColor;
+                prevCtx.fillRect(p2vx, p2vy, 20, 13);
+                prevCtx.fillStyle = '#000';
+                prevCtx.font = 'bold 9px monospace';
+                prevCtx.textAlign = 'center';
+                prevCtx.fillText('P2', p2vx + 10, p2vy + 11);
+                prevCtx.textAlign = 'left';
+                await new Promise(res => setTimeout(res, 0));
+
+                let eMin = c === 0 ? 1 : c * 10;
+                let eMax = c === 8 ? 90 : (c + 1) * 10 - 1;
+
+                // Lectura rápida: 3 intentos
+                let p2votes = {};
+                for (let [xo, yo, pct] of [[0,0,0.95],[-Math.round(cW2*0.2),0,0.93],[0,-Math.round(cH2*0.2),0.90]]) {
+                    let ax2 = Math.max(0, Math.min(canvas.width  - cw2, cx2 + xo));
+                    let ay2 = Math.max(0, Math.min(canvas.height - ch2, cy2 + yo));
+                    let vc2 = document.createElement("canvas");
+                    vc2.width = cw2; vc2.height = ch2;
+                    let vctx2 = vc2.getContext('2d');
+                    vctx2.drawImage(canvas, ax2, ay2, cw2, ch2, 0, 0, cw2, ch2);
+                    let vd2 = vctx2.getImageData(0, 0, cw2, ch2).data;
+                    let lu2 = [];
+                    for (let i = 0; i < vd2.length; i += 4) lu2.push(0.299*vd2[i] + 0.587*vd2[i+1] + 0.114*vd2[i+2]);
+                    lu2.sort((a,b) => a-b);
+                    let p2 = lu2[Math.floor(lu2.length * pct)];
+                    let i2 = lu2[Math.floor(lu2.length * 0.02)];
+                    let rng2 = Math.max(1, p2 - i2);
+                    for (let i = 0; i < vd2.length; i += 4) {
+                        let nl = Math.min(255, Math.max(0, ((0.299*vd2[i]+0.587*vd2[i+1]+0.114*vd2[i+2] - i2) / rng2) * 255));
+                        vd2[i] = vd2[i+1] = vd2[i+2] = nl; vd2[i+3] = 255;
+                    }
+                    let id2 = new ImageData(vd2, cw2, ch2);
+                    vctx2.putImageData(id2, 0, 0);
+                    let vs2 = document.createElement("canvas");
+                    vs2.width = 400; vs2.height = 400;
+                    let vsCtx2 = vs2.getContext('2d');
+                    vsCtx2.fillStyle = "#fff"; vsCtx2.fillRect(0,0,400,400);
+                    vsCtx2.drawImage(vc2, 0, 0, cw2, ch2, 20, 20, 360, 360);
+                    let res2 = await tesseractWorker.recognize(vs2);
+                    let digs2 = res2.data.text.replace(/\D/g, "");
+                    for (let len = Math.min(digs2.length,2); len >= 1; len--) {
+                        for (let s = 0; s <= digs2.length - len; s++) {
+                            let num2 = parseInt(digs2.substring(s, s+len), 10);
+                            if (num2 >= eMin && num2 <= eMax) { p2votes[num2] = (p2votes[num2]||0)+1; break; }
+                        }
+                    }
+                    await new Promise(res => setTimeout(res, 0));
+                }
+
+                // Comparar con primera pasada
+                let p2winner = null, p2max = 0;
+                for (let [num, cnt] of Object.entries(p2votes)) {
+                    if (cnt > p2max) { p2max = cnt; p2winner = parseInt(num); }
+                }
+
+                // ── VISUAL: actualizar badge con resultado ──
+                prevCtx.fillStyle = p2winner !== null ? 'rgba(52,211,153,0.92)' : 'rgba(239,68,68,0.6)';
+                prevCtx.fillRect(p2vx, p2vy, 20, 13);
+                prevCtx.fillStyle = '#000';
+                prevCtx.font = 'bold 9px monospace';
+                prevCtx.textAlign = 'center';
+                prevCtx.fillText(p2winner !== null ? '✓' : '✗', p2vx + 10, p2vy + 11);
+                prevCtx.textAlign = 'left';
+
+                if (p2winner !== null) {
+                    let prev = grid[r * 9 + c];
+                    if (prev === p2winner) {
+                        // Confirma la primera pasada → aumentar confianza
+                        confidence[r * 9 + c] += p2max;
+                        console.log(`[r=${r},c=${c}] ✅ P2 confirma ${p2winner} (conf=${confidence[r*9+c]})`);
+                    } else if (prev === null) {
+                        if (p2max >= 2) {
+                            grid[r * 9 + c] = p2winner;
+                            confidence[r * 9 + c] = p2max;
+                            foundCount++;
+                            prevCtx.fillStyle = 'rgba(56, 189, 248, 0.50)';
+                            prevCtx.fillRect(p2vx, p2vy, p2vw, p2vh);
+                            console.log(`[r=${r},c=${c}] 🆕 P2 detecta ${p2winner} (${p2max} votos)`);
+                        } else {
+                            console.log(`[r=${r},c=${c}] ❌ P2 ignorado por falta de quorum (solo 1 voto para ${p2winner})`);
+                        }
+                    } else {
+                        // Discrepancia: quedarse con el que tiene más confianza acumulada
+                        if (p2max >= 2 && p2max > confidence[r * 9 + c]) {
+                            grid[r * 9 + c] = p2winner;
+                            confidence[r * 9 + c] = p2max;
+                            console.log(`[r=${r},c=${c}] ⚠️ P2 sobrescribe ${prev} por ${p2winner}`);
+                        } else {
+                            console.log(`[r=${r},c=${c}] ⚠️ P2 discrepancia: P1=${prev} vs P2=${p2winner}`);
+                        }
+                    }
+                }
+              }
+            }
+        }
+
+        updateProgress(98, "Finalizando...");
+        renderTicket();
+        beep(980, 0.2, 0.12);
+        
+        document.getElementById("scan-status-text").innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 inline mr-2" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" /></svg>¡Proceso Completado!`;
+        document.getElementById("scan-status-text").classList.replace("text-emerald-400", "text-amber-400");
+        document.getElementById("scan-progress-bar").className = "bg-gradient-to-r from-amber-400 to-orange-400 h-full rounded-full transition-all duration-300 shadow-[0_0_10px_rgba(251,191,36,0.5)]";
+
+        setTimeout(() => {
+          document.getElementById("scan-progress-wrapper").classList.add("hidden");
+          document.getElementById("preview-canvas").parentElement.classList.remove("scanner-overlay");
+
+          // Habilitar botón directamente (ya se ocultó scan-progress-wrapper)
+          const btn = document.getElementById("btn-start");
+          const nums = grid.filter(n => n !== null);
+          btn.disabled = nums.length < 1;
+
+          const statusEl = document.getElementById("ticket-status");
+          statusEl.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" /></svg> ¡Cartón leído! (${foundCount}/15) — Listo para jugar`;
+          statusEl.className = "text-sm font-bold text-emerald-400 flex items-center gap-2";
+        }, 1500);
+
+      } catch (err) {
+        console.error(err);
+        alert("Ocurrió un error inesperado al escanear la imagen. Inténtalo de nuevo.");
+        document.getElementById("scan-block").classList.add("hidden");
+        document.getElementById("drop-zone").classList.remove("hidden");
+      }
+    }
+
+    function ticketHeaderHTML() {
+      return '<div class="px-4 py-3 flex items-center justify-between t-grid border-b-2 border-slate-300/50 bg-white/40">' +
+        '<div class="text-left leading-tight"><div class="text-[10px] font-black tracking-[0.2em] text-slate-500 mb-0.5">SISTEMA</div><div class="text-sm font-black text-slate-800">AUTOMÁTICO</div></div>' +
+        '<div class="text-center leading-tight"><div class="text-2xl font-black text-slate-800 tracking-wider">BINGO</div></div>' +
+        '<div class="text-right leading-tight"><div class="text-[10px] font-black tracking-[0.2em] text-slate-500 mb-0.5">VERSIÓN</div><div class="text-sm font-black text-slate-800">INTELIGENTE</div></div>' +
+        '</div>';
+    }
+
+    function renderTicket() {
+      const el = document.getElementById("ticket");
+      el.innerHTML = ticketHeaderHTML();
+      for (let r = 0; r < 3; r++) {
+        const rowDiv = document.createElement("div");
+        rowDiv.className = "grid grid-cols-9 t-grid border-t border-slate-300/30";
+        if (r===0) rowDiv.classList.remove("border-t");
+        for (let c = 0; c < 9; c++) {
+          const idx = r * 9 + c;
+          const cell = document.createElement("div");
+          cell.className = "ticket-number flex items-center justify-center aspect-[2/3] t-grid border-r border-slate-300/40 last:border-r-0 cursor-pointer select-none bg-white/20 hover:bg-white/40";
+          renderCellValue(cell, idx);
+          cell.addEventListener("click", () => {
+            const isTachar = document.getElementById("mode-toggle") && document.getElementById("mode-toggle").checked;
+            if (isTachar) {
+              if (grid[idx] !== null && !cell.querySelector("input")) {
+                cell.classList.toggle("cell-crossed");
+              }
+            } else {
+              openCellEditor(cell, idx);
+            }
+          });
+          rowDiv.appendChild(cell);
+        }
+        el.appendChild(rowDiv);
+      }
+      updateTicketStatus();
+    }
+
+    function renderCellValue(cell, idx) {
+      const v = grid[idx];
+      if (v === null) {
+        cell.classList.add("cell-empty");
+        cell.classList.remove("bg-white/20", "hover:bg-white/40");
+        cell.innerHTML = "";
+      } else {
+        cell.classList.remove("cell-empty");
+        cell.classList.add("bg-white/20", "hover:bg-white/40");
+        cell.innerHTML = '<span class="printed-num">' + v + '</span>';
+      }
+    }
+
+    function openCellEditor(cell, idx) {
+      if (cell.querySelector("input")) return;
+      cell.innerHTML = "";
+      const input = document.createElement("input");
+      input.type = "text"; input.maxLength = 2;
+      input.value = grid[idx] !== null ? grid[idx] : "";
+      input.className = "w-4/5 h-4/5 text-center text-2xl font-black font-mono bg-white text-slate-900 rounded-lg shadow-inner focus:outline-none focus:ring-2 focus:ring-amber-400";
+      cell.appendChild(input);
+      input.addEventListener("input", () => {
+        const val = parseInt(input.value.replace(/\D/g, ""), 10);
+        grid[idx] = isNaN(val) ? null : val;
+        updateTicketStatus();
+      });
+      input.addEventListener("blur", () => renderCellValue(cell, idx));
+      input.focus(); input.select();
+    }
+
+    function toggleClickMode() {
+      const isTachar = document.getElementById("mode-toggle").checked;
+      const label = document.getElementById("action-label");
+      if (isTachar) {
+        label.textContent = "tachar el número";
+        label.className = "text-rose-400";
+      } else {
+        label.textContent = "editar el número";
+        label.className = "text-amber-400";
+      }
+    }
+
+    function updateTicketStatus() {
+      const nums = grid.filter(n => n !== null);
+      const btn = document.getElementById("btn-start");
+      const status = document.getElementById("ticket-status");
+      
+      // No actualizar si el escaneo aún está en curso (barra de progreso visible)
+      if (!document.getElementById("scan-progress-wrapper").classList.contains("hidden")) return;
+
+      if (nums.length >= 1) {
+        btn.disabled = false;
+        if (nums.length === 15) {
+          status.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" /></svg> Cartón completo y listo`;
+          status.className = "text-sm font-bold text-emerald-400 flex items-center gap-2";
+        } else {
+          status.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" /></svg> ${nums.length} números — listo para jugar`;
+          status.className = "text-sm font-bold text-amber-400 flex items-center gap-2";
+        }
+      } else {
+        btn.disabled = true;
+        status.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg> Sin números detectados`;
+        status.className = "text-sm font-bold text-rose-400 flex items-center gap-2";
+      }
+    }
+
+    function resetTicket() {
+      grid = new Array(27).fill(null);
+      document.getElementById("card-image").value = "";
+      document.getElementById("scan-block").classList.add("hidden");
+      document.getElementById("scan-progress-wrapper").classList.remove("hidden");
+      document.getElementById("preview-canvas").parentElement.classList.add("scanner-overlay");
+      document.getElementById("drop-zone").classList.remove("hidden");
+      
+      document.getElementById("scan-status-text").classList.replace("text-amber-400", "text-emerald-400");
+      document.getElementById("scan-progress-bar").className = "bg-gradient-to-r from-emerald-500 to-teal-400 h-full rounded-full transition-all duration-300 shadow-[0_0_10px_rgba(52,211,153,0.5)]";
+      updateProgress(0, "");
+      
+      const statusEl = document.getElementById("ticket-status");
+      statusEl.innerHTML = `<span class="w-2 h-2 rounded-full bg-slate-500 animate-pulse"></span> Esperando cartón...`;
+      statusEl.className = "text-sm font-semibold text-slate-400 flex items-center gap-2";
+
+      renderTicket();
+    }
+
+
+
+    function renderGameTicket() {
+      const el = document.getElementById("game-ticket");
+      el.innerHTML = ticketHeaderHTML();
+      for (let r = 0; r < 3; r++) {
+        const rowDiv = document.createElement("div");
+        rowDiv.className = "grid grid-cols-9 t-grid border-t border-slate-300/30";
+        if(r===0) rowDiv.classList.remove("border-t");
+        
+        for (let c = 0; c < 9; c++) {
+          const idx = r * 9 + c;
+          const num = grid[idx];
+          const cell = document.createElement("div");
+          cell.className = "flex items-center justify-center aspect-[2/3] t-grid border-r border-slate-300/40 last:border-r-0 cursor-pointer select-none transition-all duration-300 ";
+          
+          if (num === null) { 
+            cell.className += "ticket-number cell-empty"; 
+            rowDiv.appendChild(cell); 
+            continue; 
+          }
+          
+          const isDrawn = drawnNumbers.has(num);
+          const isHit = isDrawn && num === lastHitNum;
+          
+          cell.className += "bg-white/30 hover:bg-white/50 ";
+          if (isDrawn) cell.className += "cell-crossed ";
+          if (isHit) cell.className += "cell-hit ";
+          
+          cell.innerHTML = '<span class="printed-num">' + num + '</span>';
+          cell.onclick = () => {
+            if (drawnNumbers.has(num)) {
+              drawnNumbers.delete(num);
+              history = history.filter(n => n !== num);
+            } else { 
+              drawnNumbers.add(num); 
+              history.push(num);
+              lastHitNum = num; 
+            }
+            renderGameTicket(); updateProbabilities(); renderRowProgress(); renderBallsPanel(); renderHistory();
+          };
+          rowDiv.appendChild(cell);
+        }
+        el.appendChild(rowDiv);
+      }
+      document.getElementById("drawn-count").innerText = drawnNumbers.size + " / 90";
+    }
+
+    function renderRowProgress() {
+      const el = document.getElementById("row-progress");
+      el.innerHTML = "";
+      for (let r = 0; r < 3; r++) {
+        const rowNums = grid.slice(r * 9, r * 9 + 9).filter(n => n !== null);
+        const done = rowNums.filter(n => drawnNumbers.has(n)).length;
+        const complete = done === rowNums.length && rowNums.length > 0;
+        const row = document.createElement("div");
+        row.className = "flex items-center gap-3 text-sm";
+        row.innerHTML =
+          '<span class="w-12 text-slate-400 font-bold">Fila ' + (r + 1) + '</span>' +
+          '<div class="flex-1 h-3 bg-black/40 rounded-full overflow-hidden border border-white/5 shadow-inner"><div class="h-full rounded-full transition-all duration-500 ease-out ' +
+          (complete ? "bg-gradient-to-r from-amber-400 to-orange-400 shadow-[0_0_10px_rgba(251,191,36,0.5)]" : "bg-gradient-to-r from-emerald-500 to-teal-400 shadow-[0_0_10px_rgba(16,185,129,0.3)]") + '" style="width:' + (rowNums.length ? (done / rowNums.length) * 100 : 0) + '%"></div></div>' +
+          '<span class="w-12 text-right font-black font-mono ' + (complete ? "text-amber-400" : "text-slate-400") + '">' + done + '/' + rowNums.length + '</span>';
+        el.appendChild(row);
+      }
+    }
+
+    function updateProbabilities() {
+      const remaining = 90 - drawnNumbers.size;
+      const perRow = [0, 1, 2].map(r => grid.slice(r * 9, r * 9 + 9).filter(n => n !== null && !drawnNumbers.has(n)).length);
+      const bestNeeded = Math.min(...perRow);
+      const cardNums = grid.filter(n => n !== null);
+      const bingoNeeded = cardNums.filter(n => !drawnNumbers.has(n)).length;
+      document.getElementById("prob-linea").innerText = probNeeded(bestNeeded, remaining, 5) + "%";
+      document.getElementById("prob-bingo").innerText = probNeeded(bingoNeeded, remaining, 12) + "%";
+      document.getElementById("linea-detail").innerText = bestNeeded === 0 ? "¡LÍNEA CONSEGUIDA!" : "Faltan " + bestNeeded + " números";
+      document.getElementById("linea-detail").className = "text-xs font-bold " + (bestNeeded === 0 ? "text-amber-400" : "text-slate-300");
+      document.getElementById("bingo-detail").innerText = bingoNeeded === 0 ? "¡BINGO CONSEGUIDO!" : "Faltan " + bingoNeeded + " números";
+      document.getElementById("bingo-detail").className = "text-xs font-bold " + (bingoNeeded === 0 ? "text-emerald-400" : "text-slate-300");
+    }
+
+    function processNumber(num) {
+      if (!(num >= 1 && num <= 90) || drawnNumbers.has(num)) return;
+
+      drawnNumbers.add(num);
+      history.push(num);
+      lastHitNum = num;
+
+      const inGrid = grid.filter(n => n !== null).includes(num);
+      document.getElementById("last-heard").innerHTML = 'Última bola leída: <span class="text-3xl font-black font-mono tracking-tighter drop-shadow-[0_0_10px_rgba(251,191,36,0.6)] ' + (inGrid ? 'text-emerald-400' : 'text-amber-400') + ' ml-2 hit-anim inline-block">' + num + "</span>";
+      if (inGrid) { beep(880, 0.15, 0.15); }
+      else { beep(520, 0.08, 0.08); }
+      renderGameTicket(); updateProbabilities(); renderRowProgress(); renderHistory();
+      renderBallsPanel();
+      checkLineaBingo();
+    }
+
+    function toggleNumber(n) {
+      if (drawnNumbers.has(n)) {
+        drawnNumbers.delete(n);
+        history = history.filter(x => x !== n);
+        if (lastHitNum === n) {
+          lastHitNum = history.length > 0 ? history[history.length - 1] : null;
+        }
+      } else {
+        processNumber(n);
+        return; // processNumber ya renderiza todo
+      }
+      renderGameTicket(); updateProbabilities(); renderRowProgress(); renderHistory();
+      renderBallsPanel();
+    }
+
+    function renderBallsPanel() {
+      const panel = document.getElementById("balls-panel");
+      panel.innerHTML = "";
+      for (let decade = 0; decade < 9; decade++) {
+        const from = decade * 10 + 1;
+        const to   = Math.min(from + 9, 90);
+        const row = document.createElement("div");
+        row.className = "decade-row";
+        const label = document.createElement("span");
+        label.className = "decade-label";
+        label.textContent = from + "-" + to;
+        row.appendChild(label);
+        for (let n = from; n <= to; n++) {
+          const ball = document.createElement("div");
+          const isDrawn = drawnNumbers.has(n);
+          
+          let className = "ball-num";
+          if (isDrawn) {
+            className += n === lastHitNum ? " drawn last-drawn" : " drawn";
+          }
+          
+          ball.className = className;
+          ball.id = "ball-" + n;
+          ball.textContent = n;
+          ball.addEventListener("click", () => toggleNumber(n));
+          row.appendChild(ball);
+        }
+        panel.appendChild(row);
+      }
+    }
+
+    function checkLineaBingo() {
+      const cardNums = grid.filter(n => n !== null);
+      const bingoDone = cardNums.every(n => drawnNumbers.has(n)) && cardNums.length > 0;
+      if (bingoDone) { showAlert("🎉 ¡BINGO!", "¡Todos los números del cartón cantados!", "bingo"); return; }
+      for (let r = 0; r < 3; r++) {
+        const rowNums = grid.slice(r*9, r*9+9).filter(n => n !== null);
+        if (rowNums.length > 0 && rowNums.every(n => drawnNumbers.has(n))) {
+          showAlert("🏆 ¡LÍNEA!", "¡Fila " + (r+1) + " completa!", "linea");
+          return;
+        }
+      }
+    }
+
+    function showAlert(title, sub, type) {
+      const alertEl = document.getElementById("game-alert");
+      const textEl = document.getElementById("alert-text");
+      const subEl = document.getElementById("alert-sub");
+      alertEl.classList.remove("hidden");
+      alertEl.className = "glass-panel p-5 rounded-3xl text-center " + (type === "bingo" ? "border border-amber-400/40 shadow-[0_0_40px_rgba(245,158,11,0.3)]" : "border border-emerald-400/40 shadow-[0_0_30px_rgba(16,185,129,0.3)]");
+      textEl.className = "text-4xl font-black " + (type === "bingo" ? "text-amber-400 alert-bingo" : "text-emerald-400 alert-linea");
+      textEl.textContent = title;
+      subEl.textContent = sub;
+      if (type === "bingo") { beep(1047, 0.6, 0.3); setTimeout(() => beep(1319, 0.6, 0.3), 200); setTimeout(() => beep(1568, 0.8, 0.3), 400); }
+      else { beep(880, 0.3, 0.2); setTimeout(() => beep(1047, 0.4, 0.2), 200); }
+    }
+
+    function renderHistory() {
+      const chips = document.getElementById("history-chips");
+      const section = document.getElementById("history-section");
+      const recent = history.slice(-14).reverse();
+      section.classList.toggle("hidden", recent.length === 0);
+      chips.innerHTML = "";
+      recent.forEach((n, i) => {
+        const c = document.createElement("span");
+        const inGrid = grid.includes(n);
+        c.className = "px-3 py-1.5 rounded-xl text-sm font-mono font-bold shadow-md transition-all " +
+          (inGrid ? "bg-gradient-to-r from-emerald-600 to-teal-600 text-white border border-emerald-400/50 shadow-[0_0_10px_rgba(16,185,129,0.3)]" : "bg-black/40 text-slate-300 border border-white/5") + 
+          (i === 0 ? " scale-110 mx-1 border-amber-400/50 shadow-[0_0_15px_rgba(251,191,36,0.4)]" : "");
+        c.innerText = n;
+        chips.appendChild(c);
+      });
+    }
+
+    function manualCall() {
+      const input = document.getElementById("manual-num");
+      const n = parseInt(input.value, 10);
+      if (isNaN(n)) return;
+      processNumber(n);
+      input.value = ""; input.focus();
+    }
+
+    function undoLast() {
+      const n = history.pop();
+      if (n === undefined) return;
+      drawnNumbers.delete(n);
+      lastHitNum = null;
+      renderGameTicket(); updateProbabilities(); renderRowProgress(); renderHistory();
+      renderBallsPanel();
+    }
+
+    let phraseDebounceTimer = null;
+    let currentInterimText = "";
+    let committedPhrases = new Set();
+    let persistentMicStream = null;
+    let micAudioSource = null;
+
+    async function requestPersistentMic() {
+      if (persistentMicStream) return;
+      try {
+        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+          persistentMicStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          // Mantener nodo de audio activo en AudioContext para que Chrome no cierre el hardware
+          audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+          if (audioCtx.state === 'suspended') {
+            await audioCtx.resume();
+          }
+          micAudioSource = audioCtx.createMediaStreamSource(persistentMicStream);
+          const silentGain = audioCtx.createGain();
+          silentGain.gain.value = 0; // silenciado para no hacer eco
+          micAudioSource.connect(silentGain);
+          silentGain.connect(audioCtx.destination);
+        }
+      } catch (err) {
+        console.warn("Audio keepalive notice:", err);
+      }
+    }
+
+    function processSpeechTranscript(transcript, isFinal) {
+      const stripped = stripAccents(transcript.trim());
+      if (!stripped) return;
+
+      // Detectar línea o bingo
+      if (/\blinea\b|\blinee\b/.test(stripped)) showAlert("🏆 ¡LÍNEA!", '"Línea" cantada en sala', "linea");
+      if (/\bbingo\b/.test(stripped)) showAlert("🎉 ¡BINGO!", '"Bingo" cantado en sala', "bingo");
+
+      // Parsear la frase completa (ej: "sesenta y nueve seis nueve" -> [69], "77 siete siete" -> [77])
+      const nums = parseSpanishBingoPhrase(stripped);
+      nums.forEach(n => {
+        processNumber(n);
+      });
+    }
+
+    function initSpeechRecognition() {
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SR) return;
+      if (recognition) return;
+      recognition = new SR();
+      recognition.lang = "es-ES";
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.maxAlternatives = 1;
+
+      recognition.onstart = () => {
+        setVoiceUIState(true);
+      };
+
+      recognition.onresult = (event) => {
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const result = event.results[i];
+          const transcript = result[0].transcript.trim();
+
+          // Feedback visual instantáneo de lo que oye en directo (0ms)
+          document.getElementById("last-heard").innerHTML = 
+            'Oído: <span class="text-xl font-bold font-mono text-emerald-400 ml-2 tracking-wide">' + transcript + '</span>';
+
+          if (result.isFinal) {
+            // Frase completada por el motor de voz: procesar frase entera de inmediato
+            if (phraseDebounceTimer) { clearTimeout(phraseDebounceTimer); phraseDebounceTimer = null; }
+            processSpeechTranscript(transcript, true);
+          } else {
+            // Mientras habla: esperar una breve pausa natural entre números (300ms) para evaluar la frase completa
+            if (phraseDebounceTimer) clearTimeout(phraseDebounceTimer);
+            phraseDebounceTimer = setTimeout(() => {
+              processSpeechTranscript(transcript, false);
+            }, 300);
+          }
+        }
+      };
+
+      recognition.onend = () => {
+        if (phraseDebounceTimer) { clearTimeout(phraseDebounceTimer); phraseDebounceTimer = null; }
+        if (isListening) {
+          setTimeout(() => {
+            if (isListening) {
+              try { recognition.start(); } catch(e) {}
+            }
+          }, 20);
+        } else {
+          setVoiceUIState(false);
+        }
+      };
+
+      recognition.onerror = (e) => {
+        if (e.error === 'not-allowed') {
+          isListening = false;
+          setVoiceUIState(false, "Permiso denegado");
+        } else if (isListening && e.error !== 'no-speech') {
+          setTimeout(() => { if (isListening) { try { recognition.start(); } catch(ex){} } }, 20);
+        }
+      };
+    }
+
+    function setVoiceUIState(active, errorMsg) {
+      const btn = document.getElementById("mic-btn");
+      const status = document.getElementById("voice-status");
+      const indicator = document.getElementById("voice-indicator");
+
+      if (active) {
+        btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" /></svg> Detener Voz`;
+        btn.className = "w-full md:w-auto bg-gradient-to-b from-rose-500 to-rose-700 hover:from-rose-400 hover:to-rose-600 text-white font-extrabold px-6 py-4 rounded-2xl transition-all shadow-[0_10px_20px_-10px_rgba(225,29,72,0.5)] active:scale-95 flex items-center justify-center gap-2 border border-rose-400/30";
+        status.innerText = "Escuchando en directo... di los números";
+        status.className = "text-sm font-bold text-emerald-400";
+        indicator.className = "w-3 h-3 rounded-full bg-emerald-500 mic-listening";
+      } else {
+        btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" /></svg> Activar Voz`;
+        btn.className = "w-full md:w-auto bg-gradient-to-b from-emerald-500 to-emerald-700 hover:from-emerald-400 hover:to-emerald-600 text-white font-extrabold px-6 py-4 rounded-2xl transition-all shadow-[0_10px_20px_-10px_rgba(16,185,129,0.5)] active:scale-95 flex items-center justify-center gap-2 border border-emerald-400/30";
+        status.innerText = errorMsg || "Micrófono pausado";
+        status.className = "text-sm font-semibold " + (errorMsg ? "text-rose-400" : "text-slate-400");
+        indicator.className = "w-3 h-3 rounded-full " + (errorMsg ? "bg-rose-500" : "bg-slate-600");
+      }
+    }
+
+    let wakeLockSentinel = null;
+
+    async function requestWakeLock() {
+      try {
+        if ('wakeLock' in navigator) {
+          wakeLockSentinel = await navigator.wakeLock.request('screen');
+          wakeLockSentinel.addEventListener('release', () => { wakeLockSentinel = null; });
+        }
+      } catch (err) {
+        console.warn("WakeLock notice:", err);
+      }
+    }
+
+    async function toggleVoice() {
+      await requestPersistentMic();
+      await requestWakeLock();
+      if (!recognition) initSpeechRecognition();
+      if (!recognition) {
+        alert("Tu navegador no soporta reconocimiento de voz.");
+        return;
+      }
+
+      if (!isListening) {
+        isListening = true;
+        setVoiceUIState(true);
+        try { recognition.start(); } catch (e) {
+          // Si ya estaba en curso, continuar
+        }
+      } else {
+        isListening = false;
+        setVoiceUIState(false);
+        try { recognition.stop(); } catch (e) {}
+      }
+    }
+
+    async function startGame() {
+      drawnNumbers = new Set();
+      history = [];
+      lastHitNum = null;
+      blockedDigits = {};
+      document.getElementById("setup-section").classList.add("hidden");
+      document.getElementById("game-section").classList.remove("hidden");
+      renderGameTicket();
+      updateProbabilities();
+      renderRowProgress();
+      renderBallsPanel();
+
+      // Chime sutil sin bloquear el micrófono
+      beep(880, 0.08, 0.1);
+      setTimeout(() => beep(1174, 0.1, 0.1), 90);
+
+      // Mantener pantalla encendida y audio persistente en móviles / HTTPS
+      await requestWakeLock();
+      await requestPersistentMic();
+      initSpeechRecognition();
+      isListening = true;
+      setVoiceUIState(true);
+      try { recognition.start(); } catch(e) {}
+      
+      speak("Partida iniciada. Pulsa el botón del micrófono para escuchar.");
+    }
+
+    renderTicket();
+    renderBallsPanel();   // Panel 1-90 visible desde el inicio
+  </script>
+</body>
+</html>
